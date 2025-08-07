@@ -419,7 +419,6 @@ type Microservice struct {
 	acl           map[string][]string
 	loggers       map[Admin_LoggingServer]bool
 	statListeners map[Admin_StatisticsServer]*Statistics
-	globalStats   *Statistics
 	mu            sync.RWMutex
 	ctx           context.Context
 	cancel        context.CancelFunc
@@ -504,7 +503,11 @@ func (s *adminServer) Logging(nothing *Nothing, stream Admin_LoggingServer) erro
 	}
 
 	// Добавляем в глобальную статистику
-	s.ms.globalStats.AddEvent("/main.Admin/Logging", consumer)
+	s.ms.mu.RLock()
+	for _, stats := range s.ms.statListeners {
+		stats.AddEvent("/main.Admin/Logging", consumer)
+	}
+	s.ms.mu.RUnlock()
 
 	// Отправляем событие всем существующим логгерам (но не новому)
 	s.ms.mu.RLock()
@@ -541,14 +544,17 @@ func (s *adminServer) Statistics(interval *StatInterval, stream Admin_Statistics
 	// Создаем отдельную статистику для этого статистика
 	stats := NewStatistics()
 
+	// Уведомляем других подписчиков о новом подключении
+	s.ms.mu.RLock()
+	for _, listenerStats := range s.ms.statListeners {
+		listenerStats.AddEvent("/main.Admin/Statistics", consumer)
+	}
+	s.ms.mu.RUnlock()
+
+	// Добавляем нового подписчика
 	s.ms.mu.Lock()
 	s.ms.statListeners[stream] = stats
 	s.ms.mu.Unlock()
-
-	// Добавляем в статистику только если это второй статистик (stat2)
-	if consumer == "stat2" {
-		s.ms.globalStats.AddEvent("/main.Admin/Statistics", consumer)
-	}
 
 	defer func() {
 		s.ms.mu.Lock()
@@ -562,31 +568,12 @@ func (s *adminServer) Statistics(interval *StatInterval, stream Admin_Statistics
 	for {
 		select {
 		case <-ticker.C:
-			// Для stat1 используем глобальную статистику и сбрасываем ее
-			// Для stat2 используем накопленную статистику
+			currentStats := stats.GetStats()
+			if err := stream.Send(currentStats); err != nil {
+				return err
+			}
 			if consumer == "stat1" {
-				globalStats := s.ms.globalStats.GetStats()
-				if err := stream.Send(globalStats); err != nil {
-					return err
-				}
-				s.ms.globalStats.Reset()
-			} else {
-				// Для stat2 накапливаем события в локальной статистике
-				globalStats := s.ms.globalStats.GetStats()
-				for method, count := range globalStats.ByMethod {
-					stats.byMethod[method] += count
-				}
-				for cons, count := range globalStats.ByConsumer {
-					stats.byConsumer[cons] += count
-				}
-
-				localStats := stats.GetStats()
-				if err := stream.Send(localStats); err != nil {
-					return err
-				}
-
-				// Сбрасываем глобальную статистику после отправки stat2
-				s.ms.globalStats.Reset()
+				stats.Reset()
 			}
 		case <-s.ms.ctx.Done():
 			return nil
@@ -636,7 +623,11 @@ func (ms *Microservice) logEvent(ctx context.Context, method string) {
 	}
 
 	// Добавляем в глобальную статистику
-	ms.globalStats.AddEvent(method, consumer)
+	ms.mu.RLock()
+	for _, stats := range ms.statListeners {
+		stats.AddEvent(method, consumer)
+	}
+	ms.mu.RUnlock()
 
 	// Отправляем всем логгерам
 	ms.mu.RLock()
@@ -713,7 +704,6 @@ func StartMyMicroservice(ctx context.Context, listenAddr string, aclData string)
 		acl:           acl,
 		loggers:       make(map[Admin_LoggingServer]bool),
 		statListeners: make(map[Admin_StatisticsServer]*Statistics),
-		globalStats:   NewStatistics(),
 	}
 
 	ms.ctx, ms.cancel = context.WithCancel(ctx)
