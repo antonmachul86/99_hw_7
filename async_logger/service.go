@@ -414,7 +414,6 @@ func file_service_proto_init() {
 	file_service_proto_depIdxs = nil
 }
 
-// Микросервис структура
 type Microservice struct {
 	acl           map[string][]string
 	loggers       map[Admin_LoggingServer]bool
@@ -424,7 +423,6 @@ type Microservice struct {
 	cancel        context.CancelFunc
 }
 
-// Статистика
 type Statistics struct {
 	byMethod   map[string]uint64
 	byConsumer map[string]uint64
@@ -473,14 +471,12 @@ func (s *Statistics) Reset() {
 	s.byConsumer = make(map[string]uint64)
 }
 
-// Реализация Admin сервера
 type adminServer struct {
 	UnimplementedAdminServer
 	ms *Microservice
 }
 
 func (s *adminServer) Logging(nothing *Nothing, stream Admin_LoggingServer) error {
-	// Получаем consumer из контекста
 	consumer := "unknown"
 	if md, ok := metadata.FromIncomingContext(stream.Context()); ok {
 		if consumers := md.Get("consumer"); len(consumers) > 0 {
@@ -488,13 +484,11 @@ func (s *adminServer) Logging(nothing *Nothing, stream Admin_LoggingServer) erro
 		}
 	}
 
-	// Получаем peer адрес
 	host := "127.0.0.1:8082"
 	if peer, ok := peer.FromContext(stream.Context()); ok {
 		host = peer.Addr.String()
 	}
 
-	// Создаем событие о подключении логгера
 	event := &Event{
 		Timestamp: time.Now().Unix(),
 		Consumer:  consumer,
@@ -502,21 +496,18 @@ func (s *adminServer) Logging(nothing *Nothing, stream Admin_LoggingServer) erro
 		Host:      host,
 	}
 
-	// Добавляем в глобальную статистику
 	s.ms.mu.RLock()
 	for _, stats := range s.ms.statListeners {
 		stats.AddEvent("/main.Admin/Logging", consumer)
 	}
 	s.ms.mu.RUnlock()
 
-	// Отправляем событие всем существующим логгерам (но не новому)
 	s.ms.mu.RLock()
 	for logger := range s.ms.loggers {
 		logger.Send(event)
 	}
 	s.ms.mu.RUnlock()
 
-	// Добавляем новый логгер
 	s.ms.mu.Lock()
 	s.ms.loggers[stream] = true
 	s.ms.mu.Unlock()
@@ -527,13 +518,11 @@ func (s *adminServer) Logging(nothing *Nothing, stream Admin_LoggingServer) erro
 		s.ms.mu.Unlock()
 	}()
 
-	// Ждем завершения контекста
 	<-s.ms.ctx.Done()
 	return nil
 }
 
 func (s *adminServer) Statistics(interval *StatInterval, stream Admin_StatisticsServer) error {
-	// Получаем consumer из контекста
 	consumer := "unknown"
 	if md, ok := metadata.FromIncomingContext(stream.Context()); ok {
 		if consumers := md.Get("consumer"); len(consumers) > 0 {
@@ -541,17 +530,14 @@ func (s *adminServer) Statistics(interval *StatInterval, stream Admin_Statistics
 		}
 	}
 
-	// Создаем отдельную статистику для этого статистика
 	stats := NewStatistics()
 
-	// Уведомляем других подписчиков о новом подключении
 	s.ms.mu.RLock()
 	for _, listenerStats := range s.ms.statListeners {
 		listenerStats.AddEvent("/main.Admin/Statistics", consumer)
 	}
 	s.ms.mu.RUnlock()
 
-	// Добавляем нового подписчика
 	s.ms.mu.Lock()
 	s.ms.statListeners[stream] = stats
 	s.ms.mu.Unlock()
@@ -581,7 +567,6 @@ func (s *adminServer) Statistics(interval *StatInterval, stream Admin_Statistics
 	}
 }
 
-// Реализация Biz сервера
 type bizServer struct {
 	UnimplementedBizServer
 	ms *Microservice
@@ -602,7 +587,6 @@ func (s *bizServer) Test(ctx context.Context, nothing *Nothing) (*Nothing, error
 	return &Nothing{Dummy: true}, nil
 }
 
-// Логирование события
 func (ms *Microservice) logEvent(ctx context.Context, method string) {
 	consumer := "unknown"
 	if md, ok := metadata.FromIncomingContext(ctx); ok {
@@ -622,14 +606,12 @@ func (ms *Microservice) logEvent(ctx context.Context, method string) {
 		event.Host = peer.Addr.String()
 	}
 
-	// Добавляем в глобальную статистику
 	ms.mu.RLock()
 	for _, stats := range ms.statListeners {
 		stats.AddEvent(method, consumer)
 	}
 	ms.mu.RUnlock()
 
-	// Отправляем всем логгерам
 	ms.mu.RLock()
 	for logger := range ms.loggers {
 		logger.Send(event)
@@ -637,7 +619,6 @@ func (ms *Microservice) logEvent(ctx context.Context, method string) {
 	ms.mu.RUnlock()
 }
 
-// Проверка ACL
 func (ms *Microservice) checkACL(consumer, method string) bool {
 	ms.mu.RLock()
 	defer ms.mu.RUnlock()
@@ -659,7 +640,6 @@ func (ms *Microservice) checkACL(consumer, method string) bool {
 	return false
 }
 
-// ACL interceptor
 func (ms *Microservice) aclInterceptor(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
 	consumer := "unknown"
 	if md, ok := metadata.FromIncomingContext(ctx); ok {
@@ -675,7 +655,6 @@ func (ms *Microservice) aclInterceptor(ctx context.Context, req interface{}, inf
 	return handler(ctx, req)
 }
 
-// ACL interceptor для стримов
 func (ms *Microservice) aclStreamInterceptor(srv interface{}, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
 	consumer := "unknown"
 	if md, ok := metadata.FromIncomingContext(ss.Context()); ok {
@@ -691,7 +670,6 @@ func (ms *Microservice) aclStreamInterceptor(srv interface{}, ss grpc.ServerStre
 	return handler(srv, ss)
 }
 
-// Функция для запуска микросервиса
 func StartMyMicroservice(ctx context.Context, listenAddr string, aclData string) error {
 	// Парсим ACL
 	var acl map[string][]string
@@ -708,30 +686,25 @@ func StartMyMicroservice(ctx context.Context, listenAddr string, aclData string)
 
 	ms.ctx, ms.cancel = context.WithCancel(ctx)
 
-	// Создаем gRPC сервер
 	server := grpc.NewServer(
 		grpc.UnaryInterceptor(ms.aclInterceptor),
 		grpc.StreamInterceptor(ms.aclStreamInterceptor),
 	)
 
-	// Регистрируем сервисы
 	RegisterAdminServer(server, &adminServer{ms: ms})
 	RegisterBizServer(server, &bizServer{ms: ms})
 
-	// Слушаем порт
 	listener, err := net.Listen("tcp", listenAddr)
 	if err != nil {
 		return fmt.Errorf("failed to listen: %v", err)
 	}
 
-	// Запускаем сервер в горутине
 	go func() {
 		if err := server.Serve(listener); err != nil {
 			log.Printf("server error: %v", err)
 		}
 	}()
 
-	// Ждем завершения контекста
 	go func() {
 		<-ms.ctx.Done()
 		server.GracefulStop()
@@ -746,7 +719,6 @@ func StartMyMicroservice(ctx context.Context, listenAddr string, aclData string)
 // - protoc             v6.32.0--rc2
 // source: service.proto
 
-// AdminClient is the client API for Admin service.
 type AdminClient interface {
 	Logging(ctx context.Context, in *Nothing, opts ...grpc.CallOption) (Admin_LoggingClient, error)
 	Statistics(ctx context.Context, in *StatInterval, opts ...grpc.CallOption) (Admin_StatisticsClient, error)
@@ -824,14 +796,12 @@ func (x *adminStatisticsClient) Recv() (*Stat, error) {
 	return m, nil
 }
 
-// AdminServer is the server API for Admin service.
 type AdminServer interface {
 	Logging(*Nothing, Admin_LoggingServer) error
 	Statistics(*StatInterval, Admin_StatisticsServer) error
 	mustEmbedUnimplementedAdminServer()
 }
 
-// UnimplementedAdminServer must be embedded to have forward compatible implementations.
 type UnimplementedAdminServer struct {
 }
 
@@ -843,7 +813,6 @@ func (UnimplementedAdminServer) Statistics(*StatInterval, Admin_StatisticsServer
 }
 func (UnimplementedAdminServer) mustEmbedUnimplementedAdminServer() {}
 
-// UnsafeAdminServer may be embedded to opt out of forward compatibility for this service.
 type UnsafeAdminServer interface {
 	mustEmbedUnimplementedAdminServer()
 }
@@ -894,7 +863,6 @@ func (x *adminStatisticsServer) Send(m *Stat) error {
 	return x.ServerStream.SendMsg(m)
 }
 
-// Admin_ServiceDesc is the grpc.ServiceDesc for Admin service.
 var Admin_ServiceDesc = grpc.ServiceDesc{
 	ServiceName: "main.Admin",
 	HandlerType: (*AdminServer)(nil),
@@ -914,7 +882,6 @@ var Admin_ServiceDesc = grpc.ServiceDesc{
 	Metadata: "service.proto",
 }
 
-// BizClient is the client API for Biz service.
 type BizClient interface {
 	Check(ctx context.Context, in *Nothing, opts ...grpc.CallOption) (*Nothing, error)
 	Add(ctx context.Context, in *Nothing, opts ...grpc.CallOption) (*Nothing, error)
@@ -956,7 +923,6 @@ func (c *bizClient) Test(ctx context.Context, in *Nothing, opts ...grpc.CallOpti
 	return out, nil
 }
 
-// BizServer is the server API for Biz service.
 type BizServer interface {
 	Check(context.Context, *Nothing) (*Nothing, error)
 	Add(context.Context, *Nothing) (*Nothing, error)
@@ -964,7 +930,6 @@ type BizServer interface {
 	mustEmbedUnimplementedBizServer()
 }
 
-// UnimplementedBizServer must be embedded to have forward compatible implementations.
 type UnimplementedBizServer struct {
 }
 
@@ -979,7 +944,6 @@ func (UnimplementedBizServer) Test(context.Context, *Nothing) (*Nothing, error) 
 }
 func (UnimplementedBizServer) mustEmbedUnimplementedBizServer() {}
 
-// UnsafeBizServer may be embedded to opt out of forward compatibility for this service.
 type UnsafeBizServer interface {
 	mustEmbedUnimplementedBizServer()
 }
@@ -1042,7 +1006,6 @@ func _Biz_Test_Handler(srv interface{}, ctx context.Context, dec func(interface{
 	return interceptor(ctx, in, info, handler)
 }
 
-// Biz_ServiceDesc is the grpc.ServiceDesc for Biz service.
 var Biz_ServiceDesc = grpc.ServiceDesc{
 	ServiceName: "main.Biz",
 	HandlerType: (*BizServer)(nil),
